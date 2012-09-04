@@ -641,4 +641,8 @@ extern const VMStateDescription vmstate_pci_device;
     .offset     = vmstate_offset_pointer(_state, _field, PCIDevice), \
 }
 
+int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
+                                PCIHotplugState state);
+
 #endif
+

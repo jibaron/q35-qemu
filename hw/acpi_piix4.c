@@ -23,12 +23,13 @@
 #include "apm.h"
 #include "pm_smbus.h"
 #include "pci.h"
+#include "pci_internals.h"
 #include "acpi.h"
 #include "sysemu.h"
 #include "range.h"
 #include "ioport.h"
 
-//#define DEBUG
+#define DEBUG 1
 
 #ifdef DEBUG
 # define PIIX4_DPRINTF(format, ...)     printf(format, ## __VA_ARGS__)
@@ -45,7 +46,14 @@
 #define PCI_EJ_BASE 0xae08
 #define PCI_RMV_BASE 0xae0c
 
+/* FIXME */
+#define PCI_WALK_BASE 0xae10
+#define PCI_WALK_STATUS_BASE 0xae14
+#define PCI_SHPC_ENABLE 0xae18
+
 #define PIIX4_PCI_HOTPLUG_STATUS 2
+
+int shpc_enabled = 1;
 
 struct pci_status {
     uint32_t up; /* deprecated, maintained for migration compatibility */
@@ -71,6 +79,10 @@ typedef struct PIIX4PMState {
     struct pci_status pci0_status;
     uint32_t pci0_hotplug_enable;
     uint32_t pci0_slot_device_present;
+
+    int hot_slots_pos;
+    int hot_slots_len;
+    PCIBridgeDev *hot_bridge;
 } PIIX4PMState;
 
 static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s);
@@ -91,6 +103,7 @@ static void pm_update_sci(PIIX4PMState *s)
         (((s->ar.gpe.sts[0] & s->ar.gpe.en[0])
           & PIIX4_PCI_HOTPLUG_STATUS) != 0);
 
+    fprintf(stderr, "pm_update_sci: sending sci irq, level: %d\n", sci_level);
     qemu_set_irq(s->irq, sci_level);
     /* schedule a timer interruption if needed */
     acpi_pm_tmr_update(&s->ar, (s->ar.pm1.evt.en & ACPI_BITMASK_TIMER_ENABLE) &&
@@ -282,31 +295,66 @@ static const VMStateDescription vmstate_acpi = {
     }
 };
 
-static void acpi_piix_eject_slot(PIIX4PMState *s, unsigned slots)
+static DeviceState *get_qdev_at_slot(BusState *bus, unsigned slot)
 {
     DeviceState *qdev, *next;
-    BusState *bus = qdev_get_parent_bus(&s->dev.qdev);
-    int slot = ffs(slots) - 1;
-    bool slot_free = true;
-
-    /* Mark request as complete */
-    s->pci0_status.down &= ~(1U << slot);
 
     QTAILQ_FOREACH_SAFE(qdev, &bus->children, sibling, next) {
         PCIDevice *dev = PCI_DEVICE(qdev);
-        PCIDeviceClass *pc = PCI_DEVICE_GET_CLASS(dev);
         if (PCI_SLOT(dev->devfn) == slot) {
-            if (pc->no_hotplug) {
-                slot_free = false;
-            } else {
-                object_unparent(OBJECT(dev));
-                qdev_free(qdev);
-            }
+            return qdev;
         }
     }
-    if (slot_free) {
-        s->pci0_slot_device_present &= ~(1U << slot);
+    return NULL;
+}
+    
+
+
+static void acpi_piix_eject_slot(PIIX4PMState *s, unsigned slot1, unsigned slot2)
+{
+    DeviceState *qdev;
+    PCIDevice *dev;
+    PCIDeviceClass *pc;
+    BusState *bus = qdev_get_parent_bus(&s->dev.qdev);
+    bool slot_free = true;
+
+    qdev = get_qdev_at_slot(bus, slot1); 
+    dev = PCI_DEVICE(qdev);
+
+    if (!dev)
+        fprintf(stderr, "Error! no dev in slot: %d\n", slot1);
+
+    pc = PCI_DEVICE_GET_CLASS(dev);
+
+    if (slot2 && !pc->is_bridge)
+        fprintf(stderr, "Error! requesting slot2 but slot1 not a bridge\n");
+
+    if (slot2) {
+        PCIBridge *br = DO_UPCAST(PCIBridge, dev, dev);
+        qdev = get_qdev_at_slot(&br->sec_bus.qbus, slot2);
+        dev = PCI_DEVICE(qdev);
+        pc = PCI_DEVICE_GET_CLASS(dev);
     }
+
+    if (pc->no_hotplug)
+        slot_free = false;
+    else {
+        object_unparent(OBJECT(qdev));
+        qdev_free(qdev);
+    }
+
+    /* FIXME: can this be moved to the end here? */
+    /* Mark request as complete */
+    if (!slot2) {
+        s->pci0_status.down &= ~(1U << slot1);
+        if (slot_free) 
+            s->pci0_slot_device_present &= ~(1U << slot1);
+    } else {
+        PCIBridgeDev *pbd = (PCIBridgeDev *)dev->bus->parent_dev;
+        pbd->slot_device_disable &= ~(1U << slot2);
+        if (slot_free)
+            pbd->slot_device_present &= ~(1U << slot2);
+    } 
 }
 
 static void piix4_update_hotplug(PIIX4PMState *s)
@@ -317,7 +365,7 @@ static void piix4_update_hotplug(PIIX4PMState *s)
 
     /* Execute any pending removes during reset */
     while (s->pci0_status.down) {
-        acpi_piix_eject_slot(s, s->pci0_status.down);
+        acpi_piix_eject_slot(s, 0, s->pci0_status.down);
     }
 
     s->pci0_hotplug_enable = ~0;
@@ -435,6 +483,7 @@ i2c_bus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
     acpi_pm1_cnt_init(&s->ar);
     s->smi_irq = smi_irq;
     s->kvm_enabled = kvm_enabled;
+    s->hot_slots_pos = 0;
 
     qdev_init_nofail(&dev->qdev);
 
@@ -504,7 +553,12 @@ static uint32_t pci_up_read(void *opaque, uint32_t addr)
 
     /* Manufacture an "up" value to cause a device check on any hotplug
      * slot with a device.  Extra device checks are harmless. */
-    val = s->pci0_slot_device_present & s->pci0_hotplug_enable;
+    
+    if (!s->hot_bridge) {
+        val = s->pci0_slot_device_present & s->pci0_hotplug_enable;
+    } else {
+        val = s->hot_bridge->slot_device_present;
+    }
 
     PIIX4_DPRINTF("pci_up_read %x\n", val);
     return val;
@@ -513,7 +567,13 @@ static uint32_t pci_up_read(void *opaque, uint32_t addr)
 static uint32_t pci_down_read(void *opaque, uint32_t addr)
 {
     PIIX4PMState *s = opaque;
-    uint32_t val = s->pci0_status.down;
+    uint32_t val;
+
+    if (!s->hot_bridge) {
+        val = s->pci0_status.down;
+    } else {
+        val = s->hot_bridge->slot_device_disable;
+    } 
 
     PIIX4_DPRINTF("pci_down_read %x\n", val);
     return val;
@@ -528,7 +588,12 @@ static uint32_t pci_features_read(void *opaque, uint32_t addr)
 
 static void pciej_write(void *opaque, uint32_t addr, uint32_t val)
 {
-    acpi_piix_eject_slot(opaque, val);
+    unsigned slot1 = (0xff00 & val) >> 8;
+    unsigned slot2 = (0x00ff & val);
+
+    fprintf(stderr, "piix4, eject, slot 1: %d, slot 2: %d\n", slot1, slot2);
+
+    acpi_piix_eject_slot(opaque, slot1, slot2);
 
     PIIX4_DPRINTF("pciej write %x <== %d\n", addr, val);
 }
@@ -540,8 +605,49 @@ static uint32_t pcirmv_read(void *opaque, uint32_t addr)
     return s->pci0_hotplug_enable;
 }
 
-static int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
+static int hot_slots[1];
+
+static void pciw_write(void *opaque, uint32_t addr, uint32_t val)
+{
+    PIIX4PMState *s = opaque;
+
+    PIIX4_DPRINTF("pciw write %x <== %d\n", addr, val);
+
+    if (val == 0)
+        s->hot_slots_pos = 0;
+        
+}
+
+static uint32_t pciws_read(void *opaque, uint32_t addr)
+{
+    uint32_t val;
+    PIIX4PMState *s = opaque;
+
+    val = 0;
+
+    if (s->hot_slots_pos < s->hot_slots_len) {
+        val = hot_slots[s->hot_slots_pos];
+        s->hot_slots_pos++;
+    } else {
+        //set up pci up/down appropriately
+        val = 0;
+    }
+
+    PIIX4_DPRINTF("pciws read %x <== %d\n", addr, val);
+    return val;
+}
+
+static void pci_shpc_write(void *opaque, uint32_t addr, uint32_t val)
+{
+    PIIX4_DPRINTF("pci shpc write %x <== %d\n", addr, val);
+
+    shpc_enabled = val;
+}
+
+/*
+int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
                                 PCIHotplugState state);
+*/
 
 static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s)
 {
@@ -558,6 +664,11 @@ static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s)
 
     register_ioport_read(PCI_RMV_BASE, 4, 4,  pcirmv_read, s);
 
+    register_ioport_write(PCI_WALK_BASE, 4, 4, pciw_write, s);
+    register_ioport_read(PCI_WALK_STATUS_BASE, 4, 4, pciws_read, s);
+
+    register_ioport_write(PCI_SHPC_ENABLE, 4, 4, pci_shpc_write, s);
+
     pci_bus_hotplug(bus, piix4_device_hotplug, &s->dev.qdev);
 }
 
@@ -573,28 +684,73 @@ static void disable_device(PIIX4PMState *s, int slot)
     s->pci0_status.down |= (1U << slot);
 }
 
-static int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
+int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
 				PCIHotplugState state)
 {
     int slot = PCI_SLOT(dev->devfn);
     PIIX4PMState *s = DO_UPCAST(PIIX4PMState, dev,
                                 PCI_DEVICE(qdev));
 
+    PCIDevice *t;
+    int i;
+    int len = 0;
+
+    for (t = dev->bus->parent_dev; t; t = t->bus->parent_dev) {
+        fprintf(stderr, "back walk, dev: %d, func: %d\n", PCI_SLOT(t->devfn), PCI_FUNC(t->devfn));
+        len++;
+    }
+
+    i = len - 1;
+    for (t = dev->bus->parent_dev; t; t = t->bus->parent_dev) {
+        hot_slots[i--] = PCI_SLOT(t->devfn); 
+        fprintf(stderr, "fill hot_slots: %d\n", PCI_SLOT(t->devfn));
+    }
+
+    s->hot_slots_len = len;
+    fprintf(stderr, "setting hot_slots_len to: %d\n", len);
+
+    /* or if its a level 1 bridge return */
+    /*
+    if (len > 0) {
+        fprintf(stderr, "need to implement greater than 2 depth hotplug!\n");
+        return 0;
+    }
+    */
+
+    if (len == 0)
+        s->hot_bridge = NULL;
+    else
+        s->hot_bridge = (PCIBridgeDev *)dev->bus->parent_dev;
+
     /* Don't send event when device is enabled during qemu machine creation:
      * it is present on boot, no hotplug event is necessary. We do send an
      * event when the device is disabled later. */
-    if (state == PCI_COLDPLUG_ENABLED) {
-        s->pci0_slot_device_present |= (1U << slot);
-        return 0;
-    }
 
-    if (state == PCI_HOTPLUG_ENABLED) {
-        enable_device(s, slot);
+    if (len == 0) {
+        if (state == PCI_COLDPLUG_ENABLED) {
+            s->pci0_slot_device_present |= (1U << slot);
+            return 0;
+        }
+        if (state == PCI_HOTPLUG_ENABLED) {
+            fprintf(stderr, "hotplug before enable: gpe.en: %d\n", s->ar.gpe.en[0]);
+            enable_device(s, slot);
+        } else {
+            disable_device(s, slot);
+        }
+        pm_update_sci(s);
     } else {
-        disable_device(s, slot);
+        /* FIXME: don't allow bridge delete if its still referenced */
+        s->ar.gpe.sts[0] |= PIIX4_PCI_HOTPLUG_STATUS;
+        if (state == PCI_HOTPLUG_ENABLED) {
+            s->hot_bridge->slot_device_present |= (1U << slot);
+        }
+        if (state == PCI_HOTPLUG_DISABLED) {
+            s->hot_bridge->slot_device_disable |= (1U << slot);
+        }
+        fprintf(stderr, "requesting sci irq during bridge hotplug\n");
+        fprintf(stderr, "hotplug before enable: gpe.en: %d\n", s->ar.gpe.en[0]);
+        pm_update_sci(s);
     }
 
-    pm_update_sci(s);
-
-    return 0;
+   return 0;
 }

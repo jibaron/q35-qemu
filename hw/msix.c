@@ -100,6 +100,8 @@ static uint64_t msix_mmio_read(void *opaque, target_phys_addr_t addr,
     unsigned int offset = addr & (MSIX_PAGE_SIZE - 1) & ~0x3;
     void *page = dev->msix_table_page;
 
+    fprintf(stderr, "msix_mmio_read called!\n");
+
     return pci_get_long(page + offset);
 }
 

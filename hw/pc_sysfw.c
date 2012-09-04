@@ -148,6 +148,9 @@ static void old_pc_system_rom_init(MemoryRegion *rom_memory)
     } else {
         bios_size = -1;
     }
+
+    fprintf(stderr, "bios size: %d\n", bios_size);
+
     if (bios_size <= 0 ||
         (bios_size % 65536) != 0) {
         goto bios_error;

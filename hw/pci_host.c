@@ -50,6 +50,8 @@ static inline PCIDevice *pci_dev_find_by_addr(PCIBus *bus, uint32_t addr)
 void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
                                   uint32_t limit, uint32_t val, uint32_t len)
 {
+    //fprintf(stderr, "pci_host_config_write_common: name: %s config_write addr: %p\n", pci_dev->name, pci_dev->config_write);
+
     assert(len <= 4);
     pci_dev->config_write(pci_dev, addr, val, MIN(len, limit - addr));
 }
@@ -124,8 +126,10 @@ static void pci_host_data_write(void *opaque, target_phys_addr_t addr,
     PCIHostState *s = opaque;
     PCI_DPRINTF("write addr " TARGET_FMT_plx " len %d val %x\n",
                 addr, len, (unsigned)val);
-    if (s->config_reg & (1u << 31))
+    if (s->config_reg & (1u << 31)) {
+        //fprintf(stderr, "pci_host_data_write, addr: %p, bus: %d\n", addr, s->bus);
         pci_data_write(s->bus, s->config_reg | (addr & 3), val, len);
+    }
 }
 
 static uint64_t pci_host_data_read(void *opaque,
@@ -135,6 +139,7 @@ static uint64_t pci_host_data_read(void *opaque,
     uint32_t val;
     if (!(s->config_reg & (1 << 31)))
         return 0xffffffff;
+    //fprintf(stderr, "pci_host_data_read, addr: %p, bus: %d\n", addr, s->bus);
     val = pci_data_read(s->bus, s->config_reg | (addr & 3), len);
     PCI_DPRINTF("read addr " TARGET_FMT_plx " len %d val %x\n",
                 addr, len, val);

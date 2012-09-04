@@ -496,6 +496,10 @@ static int shpc_device_hotplug(DeviceState *qdev, PCIDevice *affected_dev,
     int pci_slot = PCI_SLOT(affected_dev->devfn);
     uint8_t state;
     uint8_t led;
+
+    fprintf(stderr, "shpc_device_hotplug enter call\n");
+
+
     PCIDevice *d = DO_UPCAST(PCIDevice, qdev, qdev);
     SHPCDevice *shpc = d->shpc;
     int slot = SHPC_PCI_TO_IDX(pci_slot);

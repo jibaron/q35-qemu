@@ -288,6 +288,8 @@ static void virtio_ioport_write(void *opaque, uint32_t addr, uint32_t val)
     VirtIODevice *vdev = proxy->vdev;
     target_phys_addr_t pa;
 
+    //fprintf(stderr, "virtio_ioport_write, addr: %x\n", addr);
+
     switch (addr) {
     case VIRTIO_PCI_GUEST_FEATURES:
 	/* Guest does not negotiate properly?  We have to assume nothing. */
@@ -342,8 +344,12 @@ static void virtio_ioport_write(void *opaque, uint32_t addr, uint32_t val)
     case VIRTIO_MSI_CONFIG_VECTOR:
         msix_vector_unuse(&proxy->pci_dev, vdev->config_vector);
         /* Make it possible for guest to discover an error took place. */
-        if (msix_vector_use(&proxy->pci_dev, val) < 0)
+        if (msix_vector_use(&proxy->pci_dev, val) < 0) {
+            fprintf(stderr, "msix_vector_use\n");
             val = VIRTIO_NO_VECTOR;
+        } else {
+            fprintf(stderr, "msix_vector not in use\n");
+        }
         vdev->config_vector = val;
         break;
     case VIRTIO_MSI_QUEUE_VECTOR:
@@ -365,6 +371,9 @@ static uint32_t virtio_ioport_read(VirtIOPCIProxy *proxy, uint32_t addr)
 {
     VirtIODevice *vdev = proxy->vdev;
     uint32_t ret = 0xFFFFFFFF;
+
+
+    //fprintf(stderr, "virtio_ioport_read, addr: %x\n", addr);
 
     switch (addr) {
     case VIRTIO_PCI_HOST_FEATURES:
@@ -454,6 +463,9 @@ static void virtio_pci_config_writeb(void *opaque, uint32_t addr, uint32_t val)
 {
     VirtIOPCIProxy *proxy = opaque;
     uint32_t config = VIRTIO_PCI_CONFIG(&proxy->pci_dev);
+
+    //fprintf(stderr, "virtio_pci_config_writeb\n");
+
     if (addr < config) {
         virtio_ioport_write(proxy, addr, val);
         return;
@@ -466,6 +478,9 @@ static void virtio_pci_config_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     VirtIOPCIProxy *proxy = opaque;
     uint32_t config = VIRTIO_PCI_CONFIG(&proxy->pci_dev);
+
+    //fprintf(stderr, "virtio_pci_config_writew\n");
+
     if (addr < config) {
         virtio_ioport_write(proxy, addr, val);
         return;
@@ -481,6 +496,9 @@ static void virtio_pci_config_writel(void *opaque, uint32_t addr, uint32_t val)
 {
     VirtIOPCIProxy *proxy = opaque;
     uint32_t config = VIRTIO_PCI_CONFIG(&proxy->pci_dev);
+
+    //fprintf(stderr, "virtio_pci_config_writel\n");
+
     if (addr < config) {
         virtio_ioport_write(proxy, addr, val);
         return;
@@ -773,6 +791,8 @@ void virtio_init_pci(VirtIOPCIProxy *proxy, VirtIODevice *vdev)
     uint8_t *config;
     uint32_t size;
 
+    //fprintf(stderr, "virtio_init_pci enter\n");
+
     proxy->vdev = vdev;
 
     config = proxy->pci_dev.config;
@@ -801,6 +821,7 @@ void virtio_init_pci(VirtIOPCIProxy *proxy, VirtIODevice *vdev)
 
     memory_region_init_io(&proxy->bar, &virtio_pci_config_ops, proxy,
                           "virtio-pci", size);
+    //fprintf(stderr, "virtio_init_pci set virtio_pci_config_ops\n");
     pci_register_bar(&proxy->pci_dev, 0, PCI_BASE_ADDRESS_SPACE_IO,
                      &proxy->bar);
 

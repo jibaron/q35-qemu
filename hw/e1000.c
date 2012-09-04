@@ -1027,7 +1027,12 @@ static uint64_t
 e1000_mmio_read(void *opaque, target_phys_addr_t addr, unsigned size)
 {
     E1000State *s = opaque;
-    unsigned int index = (addr & 0x1ffff) >> 2;
+    unsigned int index;
+
+    //fprintf(stderr, "e1000_mmio_read, addr: %x\n", addr);
+
+    index = (addr & 0x1ffff) >> 2;
+
 
     if (index < NREADOPS && macreg_readops[index])
     {

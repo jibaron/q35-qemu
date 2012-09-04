@@ -1500,6 +1500,7 @@ int kvm_cpu_exec(CPUArchState *env)
             break;
         case KVM_EXIT_MMIO:
             DPRINTF("handle_mmio\n");
+            //fprintf(stderr, "mmio addr: %p\n", run->mmio.phys_addr);
             cpu_physical_memory_rw(run->mmio.phys_addr,
                                    run->mmio.data,
                                    run->mmio.len,

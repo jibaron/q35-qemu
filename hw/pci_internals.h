@@ -61,6 +61,21 @@ struct PCIBridge {
     MemoryRegion alias_io;
     pci_map_irq_fn map_irq;
     const char *bus_name;
+
 };
+
+struct PCIBridgeDev {
+    PCIBridge bridge;
+    MemoryRegion bar;
+    uint8_t chassis_nr;
+#define PCI_BRIDGE_DEV_F_MSI_REQ 0
+    uint32_t flags;
+
+    /* for pci hotplug */
+    uint32_t slot_device_disable;
+    uint32_t pci_hotplug_enable;
+    uint32_t slot_device_present;
+};
+typedef struct PCIBridgeDev PCIBridgeDev;
 
 #endif /* QEMU_PCI_INTERNALS_H */

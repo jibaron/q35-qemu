@@ -27,18 +27,13 @@
 #include "memory.h"
 #include "pci_internals.h"
 
+extern DeviceState *qbus_find_dev(BusState *bus, char *elem);
+
+
 #define REDHAT_PCI_VENDOR_ID 0x1b36
 #define PCI_BRIDGE_DEV_VENDOR_ID REDHAT_PCI_VENDOR_ID
 #define PCI_BRIDGE_DEV_DEVICE_ID 0x1
 
-struct PCIBridgeDev {
-    PCIBridge bridge;
-    MemoryRegion bar;
-    uint8_t chassis_nr;
-#define PCI_BRIDGE_DEV_F_MSI_REQ 0
-    uint32_t flags;
-};
-typedef struct PCIBridgeDev PCIBridgeDev;
 
 /* Mapping mandated by PCI-to-PCI Bridge architecture specification,
  * revision 1.2 */
@@ -50,19 +45,32 @@ static int pci_bridge_dev_map_irq_fn(PCIDevice *dev, int irq_num)
 
 static int pci_bridge_dev_initfn(PCIDevice *dev)
 {
+    DeviceState *piix4_ds;
     PCIBridge *br = DO_UPCAST(PCIBridge, dev, dev);
     PCIBridgeDev *bridge_dev = DO_UPCAST(PCIBridgeDev, bridge, br);
-    int err;
+    int err, ret;
+
+    bridge_dev->slot_device_present = 0;
     pci_bridge_map_irq(br, NULL, pci_bridge_dev_map_irq_fn);
     err = pci_bridge_initfn(dev);
     if (err) {
         goto bridge_error;
     }
-    memory_region_init(&bridge_dev->bar, "shpc-bar", shpc_bar_size(dev));
-    err = shpc_init(dev, &br->sec_bus, &bridge_dev->bar, 0);
+    //memory_region_init(&bridge_dev->bar, "shpc-bar", shpc_bar_size(dev));
+    //err = shpc_init(dev, &br->sec_bus, &bridge_dev->bar, 0);
+    piix4_ds = qbus_find_dev(&dev->bus->qbus, (char *)"PIIX4_PM");
+    //PIIX4PMState *s = DO_UPCAST(PIIX4PMState, dev,
+    //                            PCI_DEVICE(piix4_ds));
+    if (piix4_ds) {
+        pci_bus_hotplug(&br->sec_bus, piix4_device_hotplug, piix4_ds);
+        fprintf(stderr, "found piix4_ds!\n");
+    }
+   
+    /* 
     if (err) {
         goto shpc_error;
     }
+    */
     err = slotid_cap_init(dev, 0, bridge_dev->chassis_nr, 0);
     if (err) {
         goto slotid_error;
@@ -76,15 +84,17 @@ static int pci_bridge_dev_initfn(PCIDevice *dev)
     }
     /* TODO: spec recommends using 64 bit prefetcheable BAR.
      * Check whether that works well. */
+    /*
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
 		     PCI_BASE_ADDRESS_MEM_TYPE_64, &bridge_dev->bar);
+    */
     dev->config[PCI_INTERRUPT_PIN] = 0x1;
     return 0;
 msi_error:
     slotid_cap_cleanup(dev);
 slotid_error:
-    shpc_cleanup(dev, &bridge_dev->bar);
-shpc_error:
+    //shpc_cleanup(dev, &bridge_dev->bar);
+//shpc_error:
     memory_region_destroy(&bridge_dev->bar);
 bridge_error:
     return err;
@@ -99,8 +109,8 @@ static int pci_bridge_dev_exitfn(PCIDevice *dev)
         msi_uninit(dev);
     }
     slotid_cap_cleanup(dev);
-    shpc_cleanup(dev, &bridge_dev->bar);
-    memory_region_destroy(&bridge_dev->bar);
+    //shpc_cleanup(dev, &bridge_dev->bar);
+    //memory_region_destroy(&bridge_dev->bar);
     ret = pci_bridge_exitfn(dev);
     assert(!ret);
     return 0;
@@ -113,7 +123,7 @@ static void pci_bridge_dev_write_config(PCIDevice *d,
     if (msi_present(d)) {
         msi_write_config(d, address, val, len);
     }
-    shpc_cap_write_config(d, address, val, len);
+    //shpc_cap_write_config(d, address, val, len);
 }
 
 static void qdev_pci_bridge_dev_reset(DeviceState *qdev)
@@ -123,7 +133,7 @@ static void qdev_pci_bridge_dev_reset(DeviceState *qdev)
     if (msi_present(dev)) {
         msi_reset(dev);
     }
-    shpc_reset(dev);
+    //shpc_reset(dev);
 }
 
 static Property pci_bridge_dev_properties[] = {

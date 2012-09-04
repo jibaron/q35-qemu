@@ -973,6 +973,9 @@ static void pci_update_mappings(PCIDevice *d)
             continue;
 
         new_addr = pci_bar_address(d, i, r->type, r->size);
+        fprintf(stderr, "dev: %s i: %d, pci_update_mappings: type: %d, size: %d\n", d->name, i, r->type, r->size);
+
+        fprintf(stderr, "pci_update_mappings, new_addr: %x, r->addr: %x\n", new_addr, r->addr);
 
         /* This bar isn't changed */
         if (new_addr == r->addr)
@@ -1022,6 +1025,10 @@ void pci_default_write_config(PCIDevice *d, uint32_t addr, uint32_t val, int l)
 {
     int i, was_irq_disabled = pci_irq_disabled(d);
 
+        if (ranges_overlap(addr, l, PCI_BASE_ADDRESS_0, 24)) {
+            fprintf(stderr, "call pci_update_mappings bar update dev: %s, addr: %x, val: %x, l: %d\n", d->name, addr, val, l);
+        }
+
     for (i = 0; i < l; val >>= 8, ++i) {
         uint8_t wmask = d->wmask[addr + i];
         uint8_t w1cmask = d->w1cmask[addr + i];
@@ -1032,8 +1039,9 @@ void pci_default_write_config(PCIDevice *d, uint32_t addr, uint32_t val, int l)
     if (ranges_overlap(addr, l, PCI_BASE_ADDRESS_0, 24) ||
         ranges_overlap(addr, l, PCI_ROM_ADDRESS, 4) ||
         ranges_overlap(addr, l, PCI_ROM_ADDRESS1, 4) ||
-        range_covers_byte(addr, l, PCI_COMMAND))
+        range_covers_byte(addr, l, PCI_COMMAND)) {
         pci_update_mappings(d);
+    }
 
     if (range_covers_byte(addr, l, PCI_COMMAND))
         pci_update_irq_disabled(d, was_irq_disabled);

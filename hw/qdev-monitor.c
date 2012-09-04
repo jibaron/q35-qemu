@@ -239,7 +239,7 @@ static BusState *qbus_find_bus(DeviceState *dev, char *elem)
     return NULL;
 }
 
-static DeviceState *qbus_find_dev(BusState *bus, char *elem)
+DeviceState *qbus_find_dev(BusState *bus, char *elem)
 {
     DeviceState *dev;
 
@@ -276,6 +276,8 @@ static BusState *qbus_find_recursive(BusState *bus, const char *name,
     DeviceState *dev;
     BusState *child, *ret;
     int match = 1;
+
+    fprintf(stderr, "qbus_find_recursive, name: %s, bus name: %s\n", name, bus->name);
 
     if (name && (strcmp(bus->name, name) != 0)) {
         match = 0;
@@ -314,6 +316,7 @@ static BusState *qbus_find(const char *path)
             assert(!path[0]);
             elem[0] = len = 0;
         }
+        fprintf(stderr, "qbus_find elem: %s\n", elem);
         bus = qbus_find_recursive(sysbus_get_default(), elem, NULL);
         if (!bus) {
             qerror_report(QERR_BUS_NOT_FOUND, elem);
