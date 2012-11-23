@@ -177,6 +177,7 @@ int main(int argc, char **argv)
 #define MAX_VIRTIO_CONSOLES 1
 
 static const char *data_dir;
+static const char *data_dir_fallback;
 const char *bios_name = NULL;
 enum vga_retrace_method vga_retrace_method = VGA_RETRACE_DUMB;
 DisplayType display_type = DT_DEFAULT;
@@ -2009,16 +2010,16 @@ static int balloon_parse(const char *arg)
     return -1;
 }
 
-char *qemu_find_file(int type, const char *name)
+static char *qemu_find_file_in_dir(int type, const char *name, const char *dir)
 {
     int len;
     const char *subdir;
     char *buf;
 
-    /* Try the name as a straight path first */
-    if (access(name, R_OK) == 0) {
-        return g_strdup(name);
+    if (!dir) {
+        return NULL;
     }
+
     switch (type) {
     case QEMU_FILE_TYPE_BIOS:
         subdir = "";
@@ -2029,14 +2030,29 @@ char *qemu_find_file(int type, const char *name)
     default:
         abort();
     }
-    len = strlen(data_dir) + strlen(name) + strlen(subdir) + 2;
+    len = strlen(dir) + strlen(name) + strlen(subdir) + 2;
     buf = g_malloc0(len);
-    snprintf(buf, len, "%s/%s%s", data_dir, subdir, name);
+    snprintf(buf, len, "%s/%s%s", dir, subdir, name);
     if (access(buf, R_OK)) {
         g_free(buf);
         return NULL;
     }
     return buf;
+}
+
+char *qemu_find_file(int type, const char *name)
+{
+    char *filename;
+
+    /* Try the name as a straight path first */
+    if (access(name, R_OK) == 0) {
+        return g_strdup(name);
+    }
+    filename = qemu_find_file_in_dir(type, name, data_dir);
+    if (!filename) {
+        filename = qemu_find_file_in_dir(type, name, data_dir_fallback);
+    }
+    return filename;
 }
 
 static int device_help_func(QemuOpts *opts, void *opaque)
@@ -3538,12 +3554,10 @@ int main(int argc, char **argv, char **envp)
 
     /* If no data_dir is specified then try to find it relative to the
        executable path.  */
-    if (!data_dir) {
-        data_dir = os_find_datadir(argv[0]);
-    }
+    data_dir_fallback = os_find_datadir(argv[0]);
     /* If all else fails use the install path specified when building. */
-    if (!data_dir) {
-        data_dir = CONFIG_QEMU_DATADIR;
+    if (!data_dir_fallback) {
+        data_dir_fallback = CONFIG_QEMU_DATADIR;
     }
 
     /*
