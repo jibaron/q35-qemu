@@ -1107,3 +1107,22 @@ void ioapic_init_gsi(GSIState *gsi_state, const char *parent_name)
         gsi_state->ioapic_irq[i] = qdev_get_gpio_in(dev, i);
     }
 }
+
+int find_and_load_dsdt(const char *dsdt_name)
+{
+    char *filename;
+    char buf[1024];
+
+    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, dsdt_name);
+    if (!filename) {
+        return -1;
+    }
+    snprintf(buf, sizeof(buf), "file=%s", filename);
+    g_free(filename);
+    if (acpi_table_add(buf) < 0) {
+        fprintf(stderr, "Wrong acpi table provided\n");
+        return -1;
+    }
+
+    return 0;
+}

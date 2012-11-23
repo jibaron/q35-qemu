@@ -86,6 +86,13 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
     PCIDevice *ahci;
     qemu_irq *cmos_s3;
 
+    /* let's first see if we can find the proper dsdt */
+    if (find_and_load_dsdt("q35-acpi-dsdt.aml")) {
+        fprintf(stderr, "Couldn't find q35 dsdt table!\n"
+                        "Try updating your bios.\n");
+        exit(1);
+    }
+
     pc_cpus_init(cpu_model);
 
     kvmclock_create();

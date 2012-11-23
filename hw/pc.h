@@ -185,5 +185,7 @@ void pc_system_firmware_init(MemoryRegion *rom_memory);
 #define E820_UNUSABLE   5
 
 int e820_add_entry(uint64_t, uint64_t, uint32_t);
+int find_and_load_dsdt(const char *dsdt_name);
+
 
 #endif
